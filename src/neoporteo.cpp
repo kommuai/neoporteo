@@ -8,21 +8,19 @@
 #include <utility>
 #include <vector>
 
+#include <GL/glew.h>
+
+#include <SDL.h>
+#include <SDL_opengl.h>
+
+#include <mpv/client.h>
+#include <mpv/render_gl.h>
+
 #include "imgui.h"
 #include "imgui_impl_sdl.h"
 #include "imgui_impl_opengl3.h"
 #include "implot.h"
 #include "imnodes.h"
-
-#include <SDL.h>
-#include <SDL_opengl.h>
-
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
-#include <libavformat/avformat.h>
-#include <libavutil/imgutils.h>
-}
 
 #include <bzlib.h>
 #include <capnp/common.h>
@@ -30,8 +28,6 @@ extern "C" {
 #include <capnp/serialize-packed.h>
 #include <capnp/dynamic.h>
 #include <kj/array.h>
-
-uint64_t first_sec = 0;
 
 struct Dataset {
   std::vector<double> value;
@@ -246,59 +242,15 @@ public:
   }
 };
 
+static uint32_t on_mpv_render_update, on_mpv_event;
 
 int main()
 {
-  const char *fn = "av/1a393a268e8fae53---2022-07-18--05-10-35--20---qcamera.ts";
+  //const char *fn = "av/1a393a268e8fae53---2022-07-18--05-10-35--20---qcamera.ts";
+  const char *fn = "https://web.kommu.ai/depot/hottub/1a393a268e8fae53/1a393a268e8fae53---2022-07-18--05-10-35";
   const char *rl = "rlog/1a393a268e8fae53---2022-07-18--05-10-35--20---rlog.bz2";
-  AVCodecParameters *params;
-  AVFormatContext *fmt_ctx = avformat_alloc_context();
-  avformat_open_input(&fmt_ctx, fn, NULL, NULL);
-  avformat_find_stream_info(fmt_ctx, NULL);
-  params = fmt_ctx->streams[0]->codecpar;
 
-  std::vector<uint8_t *> buffers;
-
-  auto codec = avcodec_find_decoder(params->codec_id);
-  auto ctx = avcodec_alloc_context3(codec);
-  avcodec_parameters_to_context(ctx, params);
-  avcodec_open2(ctx, codec, NULL);
-  auto fri = av_frame_alloc();
-  auto fr = av_frame_alloc();
-  auto pkt = av_packet_alloc();
-  auto buf_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24, ctx->width, ctx->height, 1);
-
-  auto resize = sws_getContext(ctx->width, ctx->height, AV_PIX_FMT_YUV420P, ctx->width, ctx->height, AV_PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
-  auto duration = fmt_ctx->duration / AV_TIME_BASE;
-  std::cout << "dur: " << duration << std::endl;
-
-  int result;
-  ImVec2 fsize;
-
-  fsize.x = ctx->width;
-  fsize.y = ctx->height;
-
-  while(av_read_frame(fmt_ctx, pkt) >= 0) {
-    uint8_t *buf = (uint8_t *) av_malloc(buf_size);
-    avcodec_send_packet(ctx, pkt);
-    av_packet_unref(pkt);
-    avcodec_receive_frame(ctx, fri);
-
-    av_image_fill_arrays(fr->data, fr->linesize, buf, AV_PIX_FMT_RGB24, ctx->width, ctx->height, 1);
-    // sws_scale will fill buffer directly, no need to copy_buffer again!
-    sws_scale(resize, fri->data, fri->linesize, 0, fri->height, fr->data, fr->linesize);
-    av_frame_unref(fr);
-
-    buffers.push_back(buf);
-  }
-  auto fps = buffers.size() / duration;
-
-  std::cout << buffers.size() << std::endl;
-
-  av_packet_free(&pkt);
-  av_frame_free(&fr);
-  avformat_close_input(&fmt_ctx);
-  avcodec_free_context(&ctx);
+  const char *base = "rlog/1a393a268e8fae53---2022-07-18--05-10-35";
 
   std::vector<std::string> fields;
   std::vector<SchemaItem> roots;
@@ -323,11 +275,19 @@ int main()
     std::sort(roots.begin(), roots.end(), [](auto& a, auto &b) {return a.name < b.name;});
   }
 
-  std::unordered_map<std::string, std::vector<capnp::DynamicStruct::Reader>> events;
   {
+  uint64_t first_sec = 0;
+  int i = 0;
+  while (true) {
     std::vector<uint8_t> raw;
     {
-      FILE *f = fopen(rl, "rb");
+      char fname[256];
+      sprintf(fname, "%s--%d---rlog.bz2", base, i);
+      std::cerr << fname << std::endl;
+
+      FILE *f = fopen(fname, "rb");
+      if (!f)
+        break;
       auto bzerr = BZ_OK;
       auto bytes = BZ2_bzReadOpen(&bzerr, f, 0, 0, NULL, 0);
       if (bzerr != BZ_OK) {
@@ -356,6 +316,7 @@ int main()
       BZ2_bzReadClose(&bzerr, bytes);
       fclose(f);
     }
+    i++;
 
     auto amsg = kj::ArrayPtr((const capnp::word*)raw.data(), raw.size()/sizeof(capnp::word));
     while (amsg.size() > 0) {
@@ -388,20 +349,23 @@ int main()
           auto r = ev.get(root.name);
           root.populate_with(r, time);
         }
-
-        for (const auto field : fields) {
-          if (ev.has(field))
-            events[field].push_back(ev);
-        }
       } catch (const kj::Exception& e) {
         std::cerr << e.getDescription().cStr() << std::endl;
         return -1;
       }
     }
   }
+  }
 
   for (auto& root : roots)
     root.do_count();
+
+  ImVec2 fsize = {480, 360};
+
+  auto mpv = mpv_create();
+  mpv_initialize(mpv);
+  // mpv_request_log_messages(mpv, "debug");
+  SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "no");
 
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0)
   {
@@ -425,6 +389,47 @@ int main()
   SDL_GL_MakeCurrent(window, gl_context);
   SDL_GL_SetSwapInterval(1); // Enable vsync
 
+  glewInit();
+
+  mpv_set_option_string(mpv, "gpu-hwdec-interop", "no");
+  mpv_set_option_string(mpv, "video-timing-offset", "0");
+  mpv_set_option_string(mpv, "keep-open", "always");
+  mpv_set_option_string(mpv, "pause", "1");
+
+  mpv_opengl_init_params moi = {
+    .get_proc_address = [](auto ctx, auto name) {
+      return SDL_GL_GetProcAddress(name);
+    },
+  };
+  int one = 1;
+  mpv_render_param params[] = {
+    {MPV_RENDER_PARAM_API_TYPE, (void *) MPV_RENDER_API_TYPE_OPENGL},
+    {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &moi},
+    {MPV_RENDER_PARAM_ADVANCED_CONTROL, &one},
+    {MPV_RENDER_PARAM_INVALID},
+  };
+  mpv_render_context *mpv_gl;
+  mpv_render_context_create(&mpv_gl, mpv, params);
+  on_mpv_render_update = SDL_RegisterEvents(1);
+  on_mpv_event = SDL_RegisterEvents(1);
+  mpv_set_wakeup_callback(mpv, [](auto ctx) {
+    SDL_Event ev = {.type = on_mpv_event};
+    SDL_PushEvent(&ev);
+  }, NULL);
+  mpv_render_context_set_update_callback(mpv_gl, [](auto ctx) {
+    SDL_Event ev = {.type = on_mpv_render_update};
+    SDL_PushEvent(&ev);
+  }, NULL);
+
+#define MPV(...) {\
+  const char *cmd[] = { __VA_ARGS__, NULL };  \
+  mpv_command_async(mpv, 0, cmd);       \
+}
+
+  MPV("loadfile", fn);
+
+  double duration = -1;
+
   // Setup Dear ImGui context
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
@@ -444,44 +449,97 @@ int main()
   glBindTexture(GL_TEXTURE_2D, texture);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fsize.x, fsize.y, 0, GL_RGB, GL_UNSIGNED_BYTE, (const GLvoid*) buffers[0]);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fsize.x, fsize.y, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+
+  GLuint fbo;
+  glGenFramebuffers(1, &fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
 
   auto begin = ImGui::GetTime();
   unsigned cur_frame = -1;
+  const auto fps = 20;
 
   bool done = false;
-  float drift = 0;
 
   bool playing = false;
   double movie_delta = 0;
   while (!done) {
+    bool redraw = false;
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       ImGui_ImplSDL2_ProcessEvent(&event);
       done |= event.type == SDL_QUIT;
       done |= event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(window);
+
+      if (event.type == on_mpv_event) {
+        mpv_event *mev;
+        while ((mev = mpv_wait_event(mpv, 0))->event_id != MPV_EVENT_NONE) {
+          switch (mev->event_id) {
+            case MPV_EVENT_LOG_MESSAGE:
+              std::cout << ((mpv_event_log_message *) mev->data)->text;
+              break;
+            case MPV_EVENT_FILE_LOADED:
+              mpv_get_property_async(mpv, 1337, "duration", MPV_FORMAT_DOUBLE);
+              break;
+            case MPV_EVENT_GET_PROPERTY_REPLY:
+              if (mev->error < 0) {
+                std::cerr << "ERR" << std::endl;
+                break;
+              }
+              if (mev->reply_userdata == 1337) {
+                duration = *(double *)((mpv_event_property *)mev->data)->data;
+                std::cout << "duration: " << duration;
+              }
+            default:
+              break;
+          }
+        }
+      } else if (event.type == on_mpv_render_update) {
+        redraw |= (mpv_render_context_update(mpv_gl) & MPV_RENDER_UPDATE_FRAME);
+      }
     }
     done |= ImGui::IsKeyReleased(ImGuiKey_Q);
 
+    if (redraw) {
+      mpv_opengl_fbo fbo_params = {
+        .fbo = (int) fbo,
+        .w = (int) fsize.x,
+        .h = (int) fsize.y,
+      };
+      int o = 1;
+      mpv_render_param params[] = {
+        {MPV_RENDER_PARAM_OPENGL_FBO, &fbo_params},
+        // {MPV_RENDER_PARAM_FLIP_Y, &o},
+        {MPV_RENDER_PARAM_INVALID},
+      };
+      mpv_render_context_render(mpv_gl, params);
+    }
+
     playing = (ImGui::IsKeyReleased(ImGuiKey_Space)) ? !playing : playing;
+    if (duration > 0) {
+      if (playing)
+        movie_delta += io.DeltaTime;
+      auto need_frame = (unsigned) (movie_delta * fps);
+      if (need_frame != cur_frame) {
+        if (need_frame - cur_frame == 1) {
+          MPV("frame-step");
+        } else {
+          auto t = std::to_string(need_frame / fps);
+          MPV("seek", t.c_str(), "absolute+exact");
+          MPV("set", "pause", "yes");
+          //MPV("frame-back-step");
+        }
+        cur_frame = need_frame;
+      }
+    }
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
     //ImGui::ShowMetricsWindow();
-
-    if (playing)
-      movie_delta += io.DeltaTime;
-
-    auto need_frame = (unsigned) (movie_delta * fps);
-    if (need_frame != cur_frame) {
-      glBindTexture(GL_TEXTURE_2D, texture);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fsize.x, fsize.y, 0, GL_RGB, GL_UNSIGNED_BYTE, (const GLvoid*) buffers[need_frame]);
-      cur_frame = need_frame;
-    }
 
     auto vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -510,7 +568,6 @@ int main()
 
     if (ImGui::Begin("VIDEO::jav.mp4")) {
       ImGui::Image((void *)(intptr_t) texture, fsize);
-      ImGui::Text("%.4f", drift);
       ImGui::End();
     }
 
@@ -628,6 +685,9 @@ int main()
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(window);
   }
+
+  mpv_render_context_free(mpv_gl);
+  mpv_detach_destroy(mpv);
 
   ImNodes::DestroyContext();
   ImPlot::DestroyContext();
