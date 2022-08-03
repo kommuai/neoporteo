@@ -1,0 +1,9 @@
+[submodule "imgui"]
+	path = imgui
+	url = ./imgui
+[submodule "implot"]
+	path = implot
+	url = ./implot
+[submodule "imnodes"]
+	path = imnodes
+	url = ./imnodes
