@@ -16,6 +16,7 @@
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
 
+#define IMGUI_IMPL_OPENGL_MAY_HAVE_VTX_OFFSET
 #include "imgui.h"
 #include "imgui_impl_sdl.h"
 #include "imgui_impl_opengl3.h"
@@ -244,7 +245,7 @@ public:
 
 static uint32_t on_mpv_render_update, on_mpv_event;
 
-int main()
+int main(int argc, char *argv[])
 {
   //const char *fn = "av/1a393a268e8fae53---2022-07-18--05-10-35--20---qcamera.ts";
   const char *fn = "https://web.kommu.ai/depot/hottub/1a393a268e8fae53/1a393a268e8fae53---2022-07-18--05-10-35";
@@ -377,7 +378,7 @@ int main()
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
 
   // Create window with graphics context
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
@@ -687,7 +688,7 @@ int main()
   }
 
   mpv_render_context_free(mpv_gl);
-  mpv_detach_destroy(mpv);
+  mpv_destroy(mpv);
 
   ImNodes::DestroyContext();
   ImPlot::DestroyContext();

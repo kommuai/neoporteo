@@ -13,17 +13,27 @@ pkg_check_modules(BZ2 REQUIRED bzip2)
 pkg_check_modules(CAP REQUIRED capnp)
 pkg_check_modules(CPC REQUIRED capnpc)
 
-pkg_check_modules(MPV REQUIRED mpv)
 pkg_check_modules(GLW REQUIRED glew)
+
+if(MINGW)
+  set(EXTERNAL_MPV TRUE)
+endif()
+
+if(NOT EXTERNAL_MPV)
+  pkg_check_modules(MPV REQUIRED mpv)
+else()
+  set(MPV_LIBRARIES ${PROJECT_SOURCE_DIR}/libmpv.dll.a)
+endif()
 
 find_package(OpenGL REQUIRED)
 
 include_directories(${SDL_INCLUDE_DIRS})
+include_directories(include)
 
 add_executable(neoporteo src/neoporteo.cpp)
-target_link_libraries(neoporteo ${SDL_LIBRARIES} ${OPENGL_LIBRARIES})
-target_link_libraries(neoporteo ${GLW_LIBRARIES} ${MPV_LIBRARIES})
+target_link_libraries(neoporteo ${SDL_LIBRARIES} ${OPENGL_LIBRARIES} ${GLW_LIBRARIES})
 target_link_libraries(neoporteo ${BZ2_LIBRARIES} ${CAP_LIBRARIES} ${CPC_LIBRARIES})
+target_link_libraries(neoporteo ${MPV_LIBRARIES})
 
 set(IMGUI_DIR imgui)
 include_directories(${IMGUI_DIR} ${IMGUI_DIR}/backends)
